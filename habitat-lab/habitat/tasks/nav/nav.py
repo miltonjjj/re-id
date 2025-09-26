@@ -319,6 +319,9 @@ class IntegratedPointGoalGPSAndCompassSensor(PointGoalSensor):
         agent_state = self._sim.get_agent_state()
         agent_position = agent_state.position
         rotation_world_agent = agent_state.rotation
+        #print(f"goals are:{episode.goals}")
+        #print(f"the first goal is: {episode.goals[0]}")
+        #print(f"the position of the first goal is:{episode.goals[0].position}")
         goal_position = np.array(episode.goals[0].position, dtype=np.float32)
 
         return self._compute_pointgoal(

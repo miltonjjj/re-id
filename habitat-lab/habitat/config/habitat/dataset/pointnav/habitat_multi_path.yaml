@@ -1,0 +1,10 @@
+# @package habitat.dataset
+
+defaults:
+  - /habitat/dataset: dataset_config_schema
+  - _self_
+
+type: MultiPath-v1
+#split: train
+#data_path: data/datasets/pointnav/habitat-test-scenes/v1/{split}/{split}.json.gz
+data_path: data/datasets/pointnav/gibson/v2/multi_path/content/Adrian.json.gz

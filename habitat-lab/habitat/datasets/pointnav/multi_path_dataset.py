@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from habitat.config import read_write
 from habitat.core.dataset import ALL_SCENES_MASK, Dataset
 from habitat.core.registry import registry
+from habitat.datasets.pointnav.multi_path_generator import MultiPathEpisode,NavigationPath
 from habitat.tasks.nav.nav import (
     NavigationEpisode,
     NavigationGoal,
     ShortestPathPoint,
 )
+from habitat.datasets.pointnav.pointnav_dataset import PointNavDatasetV1
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -27,13 +29,11 @@ CONTENT_SCENES_PATH_FIELD = "content_scenes_path"
 DEFAULT_SCENE_PATH_PREFIX = "data/scene_datasets/"
 
 
-@registry.register_dataset(name="PointNav-v1")
-class PointNavDatasetV1(Dataset):
-    r"""Class inherited from Dataset that loads Point Navigation dataset."""
-
-    episodes: List[NavigationEpisode]
+@registry.register_dataset(name="MultiPath-v1")
+class MultiPathNavDatasetV1(PointNavDatasetV1):
+    episodes: List[MultiPathEpisode]
     content_scenes_path: str = "{data_path}/content/{scene}.json.gz"
-
+   
     @staticmethod
     def check_config_paths_exist(config: "DictConfig") -> bool:
         return os.path.exists(
@@ -97,13 +97,8 @@ class PointNavDatasetV1(Dataset):
         or `.json.gz` file formats.
         """
 
-        if fname.endswith(".pickle"):
-            # NOTE: not implemented for pointnav
-            with open(fname, "rb") as f:
-                self.from_binary(pickle.load(f), scenes_dir=scenes_dir)
-        else:
-            with gzip.open(fname, "rt") as f:
-                self.from_json(f.read(), scenes_dir=scenes_dir)
+        with gzip.open(fname, "rt") as f:
+            self.from_json(f.read(), scenes_dir=scenes_dir)
 
     def __init__(self, config: Optional["DictConfig"] = None) -> None:
         self.episodes = []
@@ -141,15 +136,7 @@ class PointNavDatasetV1(Dataset):
             self.episodes = list(
                 filter(self.build_content_scenes_filter(config), self.episodes)
             )
-
-    def to_binary(self) -> Dict[str, Any]:
-        raise NotImplementedError()
-
-    def from_binary(
-        self, data_dict: Dict[str, Any], scenes_dir: Optional[str] = None
-    ) -> None:
-        raise NotImplementedError()
-
+   
     def from_json(
         self, json_str: str, scenes_dir: Optional[str] = None
     ) -> None:
@@ -158,23 +145,87 @@ class PointNavDatasetV1(Dataset):
             self.content_scenes_path = deserialized[CONTENT_SCENES_PATH_FIELD]
 
         for episode in deserialized["episodes"]:
-            episode = NavigationEpisode(**episode)
-            #print(episode)
+            multi_episode = MultiPathEpisode(**episode)
+
             if scenes_dir is not None:
-                if episode.scene_id.startswith(DEFAULT_SCENE_PATH_PREFIX):
-                    episode.scene_id = episode.scene_id[
+                if multi_episode.scene_id.startswith(DEFAULT_SCENE_PATH_PREFIX):
+                    multi_episode.scene_id = multi_episode.scene_id[
                         len(DEFAULT_SCENE_PATH_PREFIX) :
                     ]
 
-                episode.scene_id = os.path.join(scenes_dir, episode.scene_id)
-
-            for g_index, goal in enumerate(episode.goals):
-                episode.goals[g_index] = NavigationGoal(**goal)
+                multi_episode.scene_id = os.path.join(scenes_dir, multi_episode.scene_id)
+                
+            for g_index, goal in enumerate(multi_episode.goals):
+                multi_episode.goals[g_index] = NavigationGoal(**goal)
                 #print(episode.goals)
-            if episode.shortest_paths is not None:
-                for path in episode.shortest_paths:
-                    for p_index, point in enumerate(path):
-                        path[p_index] = ShortestPathPoint(**point)
-                        #print(path)
-            #print(episode)
-            self.episodes.append(episode)
+            for p_index,path in enumerate(multi_episode.paths):
+                multi_episode.paths[p_index] = NavigationPath(**path) 
+                #print(multi_episode.paths)
+            #print(multi_episode)
+            
+            #将MultiPathEpisode转换为NavigationEpisode
+            episodes=self.convert_episodes(multi_episode)
+            self.episodes.extend(episodes)
+            #print(self.episodes)
+
+    def convert_episodes(self, multi_episode: MultiPathEpisode) -> List[NavigationEpisode]:
+        
+        navigation_episodes = []
+        num_targets = multi_episode.num_targets
+        goals = multi_episode.goals
+        paths = multi_episode.paths
+        
+        # 如果goals或paths数量不足，将num_targets改成len(goals)和len(paths)中的最小值
+        actual_targets = min(len(goals), len(paths), num_targets)
+        if actual_targets<num_targets:
+            print(f"num_targets:{num_targets}, actual targets:{actual_targets}")
+    
+        for i in range(actual_targets):
+            new_episode_id = f"{multi_episode.episode_id}_{i}"
+            
+            current_goal = goals[i] 
+            current_goals = [current_goal] 
+            
+            current_shortest_paths = None
+            if hasattr(paths[i], 'shortest_path'):
+                if paths[i].shortest_path:
+                    #检验path[i].goal和current_goal是否一致
+                    path_goal = paths[i].goal
+                
+                    path_x = path_goal['position'][0]
+                    goal_x = current_goal.position[0]
+                    
+                    # 比较x坐标是否相等
+                    if path_x != goal_x:
+                        print(f"path & goal do not match")
+                        continue
+                    
+                    shortest_path_points = []
+                    for point_data in paths[i].shortest_path:
+                        if isinstance(point_data, dict):
+                            point = ShortestPathPoint(
+                                position=point_data["position"],
+                                rotation=point_data["rotation"],
+                                action=point_data["action"]
+                            )
+                        else:
+                            point = point_data
+                        shortest_path_points.append(point)
+                    #current_shortest_paths = [shortest_path_points]
+            
+            navigation_episode = NavigationEpisode(
+                episode_id=new_episode_id,
+                scene_id=multi_episode.scene_id,
+                scene_dataset_config=multi_episode.scene_dataset_config,
+                additional_obj_config_paths=multi_episode.additional_obj_config_paths,
+                start_position=multi_episode.start_position,
+                start_rotation=multi_episode.start_rotation,
+                goals=current_goals,
+                shortest_paths=shortest_path_points,
+            )
+            #print(navigation_episode)
+            navigation_episodes.append(navigation_episode)
+
+        return navigation_episodes      
+
+        

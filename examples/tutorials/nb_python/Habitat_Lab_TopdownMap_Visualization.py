@@ -186,6 +186,7 @@ def example_get_topdown_map():
         recolor_map = np.array(
             [[255, 255, 255], [128, 128, 128], [0, 0, 0]], dtype=np.uint8
         )
+        
         # By default, `get_topdown_map_from_sim` returns image
         # containing 0 if occupied, 1 if unoccupied, and 2 if border
         # The line below recolors returned image so that
@@ -194,7 +195,10 @@ def example_get_topdown_map():
         top_down_map = recolor_map[top_down_map]
         plt.imshow(top_down_map)
         plt.title("top_down_map.png")
-        plt.show()
+        #plt.show()
+        save_filename = f"test.png"
+        save_path = os.path.join(output_path, save_filename)
+        plt.savefig(save_path)
 
 
 # [/example_3]
@@ -306,7 +310,7 @@ def example_top_down_map_measure():
             )
             vis_frames.clear()
             # Display video
-            vut.display_video(f"{output_path}/{video_name}.mp4")
+            #vut.display_video(f"{output_path}/{video_name}.mp4")
 
 
 # [/example_4]
@@ -314,7 +318,7 @@ def example_top_down_map_measure():
 
 # %%
 if __name__ == "__main__":
-    example_pointnav_draw_target_birdseye_view()
-    example_pointnav_draw_target_birdseye_view_agent_on_border()
+    #example_pointnav_draw_target_birdseye_view()
+    #example_pointnav_draw_target_birdseye_view_agent_on_border()
     example_get_topdown_map()
-    example_top_down_map_measure()
+    #example_top_down_map_measure()
