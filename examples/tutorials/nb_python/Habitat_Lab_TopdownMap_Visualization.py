@@ -320,5 +320,5 @@ def example_top_down_map_measure():
 if __name__ == "__main__":
     #example_pointnav_draw_target_birdseye_view()
     #example_pointnav_draw_target_birdseye_view_agent_on_border()
-    example_get_topdown_map()
-    #example_top_down_map_measure()
+    #example_get_topdown_map()
+    example_top_down_map_measure()
