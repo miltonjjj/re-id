@@ -1383,7 +1383,7 @@ class SimulatorCameraSensorConfig(SimulatorSensorConfig):
 @dataclass
 class SimulatorDepthSensorConfig(SimulatorSensorConfig):
     min_depth: float = 0.0
-    max_depth: float = 10.0
+    max_depth: float = 5.0
     normalize_depth: bool = True
 
 
@@ -1396,7 +1396,7 @@ class HabitatSimRGBSensorConfig(SimulatorCameraSensorConfig):
 class HabitatSimDepthSensorConfig(SimulatorCameraSensorConfig):
     type: str = "HabitatSimDepthSensor"
     min_depth: float = 0.0
-    max_depth: float = 10.0
+    max_depth: float = 5.0
     normalize_depth: bool = True
 
 

@@ -24,9 +24,8 @@ from habitat.datasets.pointnav.multi_path_dataset import MultiPathNavDatasetV1
 
 registry.register_dataset(name="MultiPath-v1")(MultiPathNavDatasetV1)
 
-NUM_EPISODES_PER_SCENE = int(20)#int(1e4)
+NUM_EPISODES_PER_SCENE = int(1)#int(1e4)
 QUAL_THRESH = 2                   
-
 
 def safe_mkdir(path):
     
@@ -68,7 +67,7 @@ def _generate_fn(scene):#生成单一场景的episodes
     scene_key = scene.split("/")[-1].split(".")[0]
     
     out_file = (
-        f"./data/datasets/pointnav/gibson/v2/multi_path/content/"
+        f"./data/datasets/pointnav/gibson/multi_path/content/"
         f"{scene_key}.json.gz"
     )
     
@@ -96,7 +95,7 @@ def generate_multi_path_dataset():#多进程并行收集数据
             gibson_large_scene_keys.append(k)
     #print(f"keys are: {gibson_large_scene_keys}")
 
-    scenes = glob.glob("./data/scene_datasets/gibson/gibson/*.glb")
+    scenes = glob.glob("./data/scene_datasets/gibson/*.glb")
     #print(f"find the scenes: {scenes}")
 
     _fltr = lambda x: x.split("/")[-1].split(".")[0] in gibson_large_scene_keys
@@ -106,7 +105,7 @@ def generate_multi_path_dataset():#多进程并行收集数据
     
     print(f"Total number of training scenes: {len(scenes)}")
 
-    safe_mkdir("./data/datasets/pointnav/gibson/v2/multi_path")
+    safe_mkdir("./data/datasets/pointnav/gibson/multi_path")
     '''
     #多进程
     with multiprocessing.Pool(8) as pool, tqdm.tqdm(total=len(scenes)) as pbar:
@@ -117,8 +116,8 @@ def generate_multi_path_dataset():#多进程并行收集数据
     import tqdm
     for scene in tqdm.tqdm(scenes):
         _generate_fn(scene)
-
-    path = "./data/datasets/pointnav/gibson/v2/multi_path/multi_path.json.gz"
+    
+    path = "./data/datasets/pointnav/gibson/multi_path/multi_path.json.gz"
     with gzip.open(path, "wt") as f:
         json.dump(dict(episodes=[]), f)
 

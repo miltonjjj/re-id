@@ -101,12 +101,18 @@ data
 /plots/outputs
 /wandb/
 
-/output_1/
-/output_2/
-/output_3/
-/output_4/
-/output_5/
-/output_6/
-/output/
-/output_samples/
+data/
+/habitat-lab/abandoned
 /habitat-lab/visualization
+/habitat-lab/visualization_2
+*_back[0-9].py
+*_back[0-9][0-9].py
+*_back.py
+*.glb
+*.ply
+*.navmesh
+*.json.gz
+*.pth
+*.pt
+*.ckpt
+*.mp4
