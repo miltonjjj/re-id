@@ -101,10 +101,16 @@ data
 /plots/outputs
 /wandb/
 
-data/
+/data
+/docs
+/examples
+habitat_baselines/
 /habitat-lab/abandoned
 /habitat-lab/visualization
 /habitat-lab/visualization_2
+/res
+/scripts
+/test
 *_back[0-9].py
 *_back[0-9][0-9].py
 *_back.py
