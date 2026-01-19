@@ -104,7 +104,7 @@ data
 /data
 /docs
 /examples
-habitat_baselines/
+habitat-baselines/
 /habitat-lab/abandoned
 /habitat-lab/visualization
 /habitat-lab/visualization_2
