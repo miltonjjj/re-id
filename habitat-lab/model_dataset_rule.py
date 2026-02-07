@@ -51,253 +51,281 @@ os.environ["HABITAT_SIM_LOG"] = "quiet"
 
 
 # ============= 规则评估函数 =============
-
-def evaluate_efficiency(all_paths, path_metrics):
+def check_action_smoothness(actions):
     """
-    评估路径效率 - 折中版本
-    """
-    if len(path_metrics) == 0:
-        return 4.0
+    检测动作序列的平滑度
     
-    efficiency_scores = []
-    
-    for path_key, metrics in path_metrics.items():
-        tortuosity = metrics.get('tortuosity', 1.0)
-        
-        # 折中阈值
-        if tortuosity < 1.15:
-            score = 9.0
-        elif tortuosity < 1.2:
-            score = 8.0
-        elif tortuosity < 1.25:
-            score = 7.0
-        elif tortuosity < 1.3:
-            score = 6.0
-        elif tortuosity < 1.4:
-            score = 5.0
-        elif tortuosity < 1.5:
-            score = 4.5
-        elif tortuosity < 1.6:
-            score = 4.0
-        elif tortuosity < 1.8:
-            score = 3.0
-        elif tortuosity < 2.0:
-            score = 2.5
-        elif tortuosity < 2.5:
-            score = 2.0
-        else:
-            score = 1.0
-        
-        efficiency_scores.append(score)
-    
-    return np.mean(efficiency_scores)
-
-
-def evaluate_exploration(all_paths, path_metrics, skeleton, robot_position):
-    """
-    评估探索价值 (Exploration)
-    
-    四项等权重加权求和：
-    - 路径长度: 0.25
-    - 终点距离: 0.25
-    - 终点位置: 0.25
-    - 路径数量: 0.25
-    """
-    if len(all_paths) == 0:
-        return 0.0
-    
-    map_height, map_width = skeleton.shape
-    map_diagonal = np.sqrt(map_height**2 + map_width**2)
-    
-    # 收集各路径的评分
-    length_scores = []
-    distance_scores = []
-    position_scores = []
-    
-    for i, path_info in enumerate(all_paths):
-        leaf_node = path_info['leaf_node']
-        
-        # 1. 路径长度评分
-        path_key = f"path_{i+1}"
-        path_length_m = path_metrics.get(path_key, {}).get('path_length_m', 0)
-        
-        if path_length_m < 1.0:
-            length_score = 2.0
-        elif path_length_m < 2.0:
-            length_score = 4.0
-        elif path_length_m < 3.0:
-            length_score = 6.0
-        elif path_length_m < 5.0:
-            length_score = 8.0
-        elif path_length_m < 7.0:
-            length_score = 9.0
-        elif path_length_m < 10.0:
-            length_score = 7.0
-        else:
-            length_score = 5.0
-        length_scores.append(length_score)
-        
-        # 2. 终点距离评分
-        endpoint_distance = np.sqrt(
-            (leaf_node[0] - robot_position[0])**2 + 
-            (leaf_node[1] - robot_position[1])**2
-        )
-        relative_distance = endpoint_distance / map_diagonal
-        
-        if relative_distance > 0.5:
-            distance_score = 9.0
-        elif relative_distance > 0.4:
-            distance_score = 7.0
-        elif relative_distance > 0.3:
-            distance_score = 5.0
-        elif relative_distance > 0.2:
-            distance_score = 3.0
-        else:
-            distance_score = 2.0
-        distance_scores.append(distance_score)
-        
-        # 3. 终点位置评分
-        y_ratio = leaf_node[0] / map_height
-        if y_ratio > 0.75:
-            position_score = 9.0
-        elif y_ratio > 0.6:
-            position_score = 7.0
-        elif y_ratio > 0.4:
-            position_score = 5.0
-        elif y_ratio > 0.2:
-            position_score = 3.0
-        else:
-            position_score = 2.0
-        position_scores.append(position_score)
-    
-    # 4. 路径数量评分
-    num_paths = len(all_paths)
-    if num_paths >= 4:
-        count_score = 10.0
-    elif num_paths >= 3:
-        count_score = 8.0
-    elif num_paths >= 2:
-        count_score = 6.0
-    else:
-        count_score = 5.0  # 单路径基准分
-    
-    # 四项等权重加权求和
-    avg_length = np.mean(length_scores)
-    avg_distance = np.mean(distance_scores)
-    avg_position = np.mean(position_scores)
-    
-    final_score = (
-        0.25 * avg_length +
-        0.25 * avg_distance +
-        0.25 * avg_position +
-        0.25 * count_score
-    )
-    
-    return min(10.0, max(0.0, final_score))
-
-
-def evaluate_paths_with_rules(all_paths, path_metrics, skeleton, robot_position):
-    """
-    使用规则综合评估路径质量
-    
-    加权公式：
-    总分 = 0.5 * Efficiency + 0.5 * Exploration
-    
-    决策：
-    - 总分 >= 5.5: keep
-    - 总分 < 5.5: delete
+    Args:
+        actions: 动作序列列表
+            - 0: Stop
+            - 1: Forward
+            - 2: Left
+            - 3: Right
     
     Returns:
-        dict: {
-            'decision': 'keep' or 'delete',
-            'score': float (0-10),
-            'sub_scores': dict,
-            'explanation': str
-        }
+        dict: 包含 oscillation_rate, avg_run_length的字典
     """
-    # 计算两个维度分数
-    efficiency_score = evaluate_efficiency(all_paths, path_metrics)
-    exploration_score = evaluate_exploration(all_paths, path_metrics, skeleton, robot_position)
+    if len(actions) <= 1:
+        return {
+            'oscillation_rate': 0.0,
+            'avg_run_length': 0.0,
+            'has_excessive_rotation': False,
+        }
     
-    # 加权计算总分（各 0.5）
-    total_score = round(
-        0.5 * efficiency_score + 
-        0.5 * exploration_score, 
-        2
-    )
+    # 排除末尾的 Stop 动作
+    action_seq = [a for a in actions if a != 0]
+    if len(action_seq) == 0:
+        return {
+            'oscillation_rate': 0.0,
+            'avg_run_length': 0.0,
+            'has_excessive_rotation': False,
+        }
     
-    # 决策
-    decision = 'keep' if total_score >= 5.5 else 'delete'
+    # 1. 计算震荡率：只统计 Left<->Right 的直接切换
+    oscillations = 0
+    for i in range(1, len(action_seq)):
+        prev_action = action_seq[i-1]
+        curr_action = action_seq[i]
+        
+        # 只有 Left(2) -> Right(3) 或 Right(3) -> Left(2) 才算震荡
+        if (prev_action == 2 and curr_action == 3) or \
+           (prev_action == 3 and curr_action == 2):
+            oscillations += 1
     
-    # 生成解释
-    explanation_parts = []
-    explanation_parts.append(f"Ef:{efficiency_score:.1f}")
-    explanation_parts.append(f"Ex:{exploration_score:.1f}")
+    oscillation_rate = oscillations / len(action_seq) if len(action_seq) > 0 else 0.0
     
-    # 添加具体原因
-    reasons = []
-    if efficiency_score < 5:
-        avg_tort = np.mean([m.get('tortuosity', 1.0) for m in path_metrics.values()])
-        reasons.append(f"路径弯曲度高(avg={avg_tort:.2f})")
-    if exploration_score < 5:
-        reasons.append("探索价值低")
+    # 2. 计算平均步长 (每种动作的平均连续长度)
+    run_lengths = []
+    current_action = action_seq[0]
+    current_length = 1
     
-    if len(reasons) == 0:
-        reasons.append("各维度评分良好")
+    for i in range(1, len(action_seq)):
+        if action_seq[i] == current_action:
+            current_length += 1
+        else:
+            run_lengths.append(current_length)
+            current_action = action_seq[i]
+            current_length = 1
+    run_lengths.append(current_length)
     
-    explanation = " | ".join(explanation_parts) + " | " + "; ".join(reasons)
+    avg_run_length = np.mean(run_lengths) if len(run_lengths) > 0 else 0.0
     
+    # 3. 检测连续旋转：连续4个或更多的Left或Right动作
+    has_excessive_rotation = False
+    consecutive_rotation = 0
+    
+    for action in action_seq:
+        if action == 2 or action == 3:  # Left 或 Right
+            consecutive_rotation += 1
+            if consecutive_rotation >= 4:
+                has_excessive_rotation = True
+                break
+        else:  # Forward
+            consecutive_rotation = 0
     return {
-        'decision': decision,
-        'score': total_score,
-        'sub_scores': {
-            'efficiency_score': round(efficiency_score, 1),
-            'exploration_score': round(exploration_score, 1)
-        },
-        'explanation': explanation,
-        'method': 'rule-based'
+        'oscillation_rate': oscillation_rate,
+        'avg_run_length': avg_run_length,
+        'has_excessive_rotation': has_excessive_rotation,
     }
 
 
+def filter_single_trajectory(path_info, actions, map_resolution=5.0,
+                            min_length_m=2.0, max_steps=50,
+                            min_curvature=1.28,max_curvature=2.5):
+    """
+    对单条轨迹进行分层筛选
+    
+    Args:
+        path_info: 路径信息字典
+        actions: 动作序列
+        map_resolution: 地图分辨率 (cm/pixel)
+        min_length_m: 最小路径长度 (米)
+        max_steps: 最大步数
+        max_curvature: 最大曲率 (路径长度/直线距离)
+    
+    Returns:
+        tuple: (is_valid: bool, reason: str, metrics: dict)
+    """
+    complete_path = path_info['complete_path']
+    
+    # 计算几何距离
+    if len(complete_path) < 2:
+        return False, "路径点数少于2", {}
+    
+    path_array = np.array(complete_path)
+    
+    # 计算路径几何距离 (沿路径的总长度)
+    path_length_pixels = 0.0
+    for i in range(len(path_array) - 1):
+        segment_length = np.linalg.norm(path_array[i+1] - path_array[i])
+        path_length_pixels += segment_length
+    
+    path_length_m = (path_length_pixels * map_resolution) / 100.0  # 转换为米
+    
+    # 计算起点到终点的欧氏距离
+    straight_distance_pixels = np.linalg.norm(path_array[-1] - path_array[0])
+    straight_distance_m = (straight_distance_pixels * map_resolution) / 100.0
+    
+    # 计算曲率
+    curvature = path_length_m / straight_distance_m if straight_distance_m > 0 else float('inf')
+    num_steps = len([a for a in actions if a != 0])
+    metrics = {
+        'path_length_m': path_length_m,
+        'straight_distance_m': straight_distance_m,
+        'curvature': curvature, 
+        'num_steps': num_steps,
+    }
+    
+    # ========== 第一部分：有效性检查 ==========
+    
+    # (1) 最小长度检查
+    if path_length_m < min_length_m:
+        return False, f"路径长度({path_length_m:.2f}m)小于最小长度({min_length_m}m)", metrics
+    
+    # (2) 最大步数检查
+    if num_steps > max_steps:
+        return False, f"步数({num_steps})超过最大步数({max_steps})", metrics
+    
+    # ========== 第二部分：几何特征检查 ==========
+    
+     # (1) 路径曲率检查 - 最小值
+    if curvature < min_curvature:
+        return False, f"曲率({curvature:.2f})小于最小值({min_curvature})", metrics
+    
+    # (2) 路径曲率检查 - 最大值
+    if curvature > max_curvature:
+        return False, f"曲率({curvature:.2f})超过最大值({max_curvature})", metrics
+    
+    # (3) 平滑度检测
+    smoothness_metrics = check_action_smoothness(actions)
+    metrics.update(smoothness_metrics)
+    
+    # 震荡率检查
+    if smoothness_metrics['oscillation_rate'] > 0.05:
+        return False, f"震荡率({smoothness_metrics['oscillation_rate']:.3f})过高(>0.05)", metrics
+    
+    # 平均步长检查
+    if smoothness_metrics['avg_run_length'] < 1.5:
+        return False, f"平均步长({smoothness_metrics['avg_run_length']:.2f})过短(<1.5)", metrics
+    
+    # 连续旋转检查
+    if smoothness_metrics['has_excessive_rotation']:
+        return False, "检测到连续4次或更多旋转动作", metrics
+
+    # 通过所有检查
+    return True, "通过所有筛选规则", metrics
+
+
+def filter_all_trajectories_independently(all_paths, skeleton, robot_position, 
+                                          map_resolution=5.0,
+                                          min_length_m=1.5, 
+                                          max_steps=50,
+                                          min_curvature=1.28, 
+                                          max_curvature=2.5):
+    """
+    对所有轨迹进行独立筛选
+    
+    Args:
+        all_paths: 所有路径信息列表
+        skeleton: 骨架地图
+        robot_position: 机器人位置
+        map_resolution: 地图分辨率 (cm/pixel)
+        min_length_m: 最小路径长度 (米)
+        max_steps: 最大步数
+        max_curvature: 最大曲率
+    
+    Returns:
+        list: 包含有效路径及其动作序列的列表
+            [{
+                'path_info': path_info,
+                'actions': actions,
+                'metrics': metrics,
+                'path_index': index
+            }, ...]
+    """
+    valid_trajectories = []
+    filter_reasons = {} 
+
+
+    for i, path_info in enumerate(all_paths):
+        complete_path = path_info['complete_path']
+        
+        # 生成动作序列
+        actions, action_details = path_to_actions(
+            complete_path,
+            initial_orientation=90.0,
+            turn_angle=30.0,
+            map_resolution=map_resolution,
+            forward_step_meters=0.25
+        )
+        
+        # 筛选该轨迹
+        is_valid, reason, metrics = filter_single_trajectory(
+            path_info, actions, map_resolution,
+            min_length_m, max_steps, min_curvature,max_curvature
+        )
+        
+        if is_valid:
+            valid_trajectories.append({
+                'path_info': path_info,
+                'actions': actions,
+                'action_details': action_details,
+                'metrics': metrics,
+                'path_index': i + 1
+            })
+        else:
+             # 统计过滤原因
+            filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
+    
+    return valid_trajectories, filter_reasons
+
+
+
 # ============= Habitat 轨迹收集工具函数 =============
+def depth_to_grayscale_image(depth):
+    """
+    将 depth 数组转换为灰度图像（用于保存为 jpg）
+    
+    Args:
+        depth: depth 数组，shape 为 (H, W) 或 (H, W, 1)
+    
+    Returns:
+        gray_rgb: 灰度图像（RGB格式，三通道相同），shape 为 (H, W, 3)
+    """
+    # 确保是 2D 数组
+    if len(depth.shape) == 3:
+        depth = depth[:, :, 0]
+    
+    # 归一化到 0-255
+    depth_min = depth.min()
+    depth_max = depth.max()
+    
+    if depth_max > depth_min:
+        depth_normalized = ((depth - depth_min) / (depth_max - depth_min) * 255).astype(np.uint8)
+    else:
+        depth_normalized = np.zeros_like(depth, dtype=np.uint8)
+    
+    # 转换为 RGB 格式（三通道相同，实际上是灰度图）
+    gray_rgb = np.stack([depth_normalized] * 3, axis=-1)
+    
+    return gray_rgb
+
 
 def quaternion_to_yaw(rotation_quat):
-    """
-    将 Habitat 四元数转换为 yaw 角度（弧度）
-    """
     w = rotation_quat.w
-    x = rotation_quat.x
     y = rotation_quat.y
-    z = rotation_quat.z
     
-    siny_cosp = 2 * (w * z + x * y)
-    cosy_cosp = 1 - 2 * (y * y + z * z)
-    yaw = np.arctan2(siny_cosp, cosy_cosp)
+    yaw = 2.0 * np.arctan2(y, w)
     
     return yaw
 
-
-# def get_agent_state_data(env):
-#     """
-#     从 Habitat 环境中获取 agent 的位置和朝向
-#     """
-#     agent_state = env.sim.get_agent_state()
-#     position = np.array(agent_state.position)  # [x, y, z]
-#     yaw = quaternion_to_yaw(agent_state.rotation)
-    
-#     return position, yaw
 def get_agent_state_data(env):
-    """
-    从 Habitat 环境中获取 agent 的位置和朝向
-    返回 2D 坐标 [x, z]（地面导航坐标）
-    """
     agent_state = env.sim.get_agent_state()
     pos_3d = agent_state.position  # [x, y, z]
-    position = np.array([pos_3d[0], pos_3d[2]])  # 只取 [x, z] 作为 2D 坐标
+    position = np.array([-pos_3d[2], -pos_3d[0]])
     yaw = quaternion_to_yaw(agent_state.rotation)
     
     return position, yaw
-
 
 def collect_trajectory_from_actions(env, actions, episode_folder_path):
     """
@@ -365,6 +393,83 @@ def collect_trajectory_from_actions(env, actions, episode_folder_path):
     
     return trajectory_data, True
 
+def validate_trajectory_deltas(trajectory_data, max_delta=0.25, len_traj_pred=8, waypoint_spacing=1):
+    """
+    验证轨迹中所有可能采样窗口的增量是否在合理范围内
+    （与 vint_dataset.py / train_utils.py 中的计算方式一致）
+    
+    Args:
+        trajectory_data: dict {'position': array (N, 2), 'yaw': array (N,)}
+        max_delta: 最大允许的单步增量 (米)
+        len_traj_pred: 预测轨迹长度 (waypoints数量)
+        waypoint_spacing: waypoint采样间隔
+    
+    Returns:
+        tuple: (is_valid: bool, reason: str)
+    """
+    positions = trajectory_data['position']  # (N, 2) 世界坐标
+    yaws = trajectory_data['yaw']            # (N,)
+    if len(yaws.shape) == 2:
+        yaws = yaws.squeeze(1)
+    traj_len = len(positions)
+    
+    # 需要至少 len_traj_pred * waypoint_spacing + 1 个点才能创建一个有效样本
+    min_required = len_traj_pred * waypoint_spacing + 1
+    if traj_len < min_required:
+        return True, f"轨迹太短 ({traj_len} < {min_required})"
+    
+    def yaw_rotmat(yaw):
+        return np.array([
+            [np.cos(yaw), -np.sin(yaw)],
+            [np.sin(yaw), np.cos(yaw)],
+        ])
+    
+    def to_local_coords(pos, curr_pos, curr_yaw):
+        rotmat = yaw_rotmat(curr_yaw)
+        return (pos - curr_pos).dot(rotmat)
+    
+    def get_delta(actions):
+        """与 train_utils.py 中的 get_delta 一致"""
+        # actions shape: (num_waypoints, 2)
+        ex_actions = np.concatenate([np.zeros((1, actions.shape[-1])), actions], axis=0)
+        delta = ex_actions[1:] - ex_actions[:-1]
+        return delta
+    
+    # 检查所有可能的采样窗口
+    context_size = 3  # 与 nomad.yaml 中的 context_size 一致
+    max_curr_time = traj_len - context_size - 1
+    
+    for curr_time in range(max_curr_time + 1):
+        start_index = curr_time
+        end_index = curr_time + len_traj_pred * waypoint_spacing + 1
+        
+        # 提取该窗口的位置和朝向
+        pos_slice = positions[start_index:end_index:waypoint_spacing]
+        yaw_slice = yaws[start_index:end_index:waypoint_spacing]
+        
+        if len(pos_slice) < 2:
+            continue
+        
+        # 转换到 ego-centric 坐标（使用该窗口起始点的 yaw）
+        waypoints = to_local_coords(pos_slice, pos_slice[0], yaw_slice[0])
+        
+        # actions = waypoints[1:] (排除原点，与 vint_dataset 一致)
+        actions = waypoints[1:]
+        
+        if len(actions) == 0:
+            continue
+        
+        # 计算 deltas（与 train_utils.py 的 get_delta 一致）
+        deltas = get_delta(actions)
+        
+        # 检查是否超出阈值
+        max_dx = np.abs(deltas[:, 0]).max()
+        max_dy = np.abs(deltas[:, 1]).max()
+        
+        if max_dx > max_delta or max_dy > max_delta:
+            return False, f"curr_time={curr_time}: max_dx={max_dx:.4f}, max_dy={max_dy:.4f}"
+    
+    return True, "通过验证"
 
 # ============= Part 1: Preprocess Functions =============
 
@@ -547,8 +652,6 @@ def generate_all_paths_to_leaves(robot_position, leaf_nodes, voronoi_graph, skel
             min_dist = dist
             start_node = tuple(node)
     
-    print(f"    起点节点: {start_node} (距离机器人 {np.sqrt(min_dist):.2f} 像素)")
-    print(f"    叶节点总数: {len(leaf_nodes)}")
     
     all_paths = []
     
@@ -575,7 +678,6 @@ def generate_all_paths_to_leaves(robot_position, leaf_nodes, voronoi_graph, skel
         
         all_paths.append(path_info)
     
-    print(f"    成功生成 {len(all_paths)} 条路径")
     
     return all_paths, start_node
 
@@ -716,7 +818,7 @@ def generate_voronoi_map_from_obs(observations):
             depth_raw = depth_obs
         
         min_depth_m = 0.5
-        max_depth_m = 5.0
+        max_depth_m = 3.0
         
         if depth_raw.max() <= 1.0:
             depth_m = min_depth_m + depth_raw * (max_depth_m - min_depth_m)
@@ -934,7 +1036,6 @@ def generate_voronoi_map_from_obs(observations):
         }
         
     except Exception as e:
-        print(f"    ✗ Voronoi地图生成失败: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -967,165 +1068,179 @@ def generate_paths_from_voronoi(voronoi_result):
         }
         
     except Exception as e:
-        print(f"    ✗ 路径生成异常: {e}")
         import traceback
         traceback.print_exc()
         return None
 
 
 # ============= Main Pipeline =============
-
-def process_single_episode(observations, episode_folder_path, scene_name, episode_num, env, rgb_obs):
+def process_single_episode_with_new_rules(observations, output_dir, scene_name, 
+                                          base_episode_num, env,
+                                          min_length_m=1.5, max_steps=50, 
+                                          min_curvature=1.28, max_curvature=2.5,
+                                        min_wall_distance_m=0.75):
     """
-    处理单个episode的完整流程（使用规则评估）
+    使用新的筛选规则处理单个 episode，为每条有效轨迹创建独立的 episode
+    
+    Args:
+        observations: 观测数据
+        output_dir: 输出目录
+        scene_name: 场景名称
+        base_episode_num: 基础 episode 编号
+        env: Habitat 环境
+        min_length_m: 最小路径长度 (米)
+        max_steps: 最大步数
+        max_curvature: 最大曲率
     
     Returns:
-        tuple: (success: bool, rule_result: dict or None)
-        - success=True, rule_result: 成功保留
-        - success=False, rule_result=None: 路径生成失败（no_path）
-        - success=False, rule_result有值: 规则拒绝（deleted）
+        tuple: (num_valid_paths: int, statistics: dict)
     """
     
-    print(f"\n{'='*70}")
-    print(f"处理 {scene_name}_ep{episode_num}")
-    print(f"{'='*70}")
     
     # ========== Step 1: 生成 Voronoi 地图 ==========
-    print("\n[步骤1] 生成Voronoi地图...")
     
     voronoi_result = generate_voronoi_map_from_obs(observations)
     if voronoi_result is None:
-        print(f"    ✗ Voronoi生成失败")
-        return False, None
+        return {
+            'total_paths': 0,
+            'valid_paths': 0,
+            'filtered_paths': 0,
+            'filter_reasons': {},
+            'successful_episodes': 0,
+            'voronoi_failed': True,
+            'no_paths': False
+        }
     
-    print(f"    ✓ Voronoi地图生成完成")
-    
+
     # ========== Step 2: 生成路径 ==========
-    print("\n[步骤2] 生成路径...")
+
     
     paths_result = generate_paths_from_voronoi(voronoi_result)
     if paths_result is None:
-        print(f"    ✗ 路径生成失败（无叶节点或无法生成路径）")
-        return False, None
+        return {
+            'total_paths': 0,
+            'valid_paths': 0,
+            'filtered_paths': 0,
+            'filter_reasons': {},
+            'successful_episodes': 0,
+            'voronoi_failed': False,
+            'no_paths': True
+        }
     
     skeleton = voronoi_result['skeleton']
     all_paths = paths_result['paths']
-    start_node = paths_result['start_node']
     robot_position = voronoi_result['robot_pos']
     
-    print(f"    ✓ 路径生成完成，共 {len(all_paths)} 条路径")
+    total_paths = len(all_paths)
     
-    # ========== Step 3: 计算路径指标 ==========
-    print("\n[步骤3] 计算路径指标...")
+    # ========== Step 3: 独立筛选所有轨迹 ==========
     
-    map_resolution = 5.0
-    paths_metrics = {}
-    
-    for i, path_info in enumerate(all_paths, 1):
-        complete_path = path_info['complete_path']
-        metrics = calculate_path_metrics(complete_path, map_resolution)
-        path_info['metrics'] = metrics
-        
-        paths_metrics[f"path_{i}"] = {
-            "path_number": i,
-            "path_length_m": round(metrics['path_length_cm'] / 100, 2),
-            "tortuosity": round(metrics['tortuosity'], 3)
+    valid_trajectories ,filter_reasons= filter_all_trajectories_independently(
+        all_paths, skeleton, robot_position,
+        map_resolution=5.0,
+        min_length_m=min_length_m,
+        max_steps=max_steps,
+        min_curvature=min_curvature,
+        max_curvature=max_curvature
+    )
+    valid_paths = len(valid_trajectories)
+    filtered_paths = total_paths - valid_paths
+
+    if len(valid_trajectories) == 0:
+        return {
+            'total_paths': total_paths,
+            'valid_paths': 0,
+            'filtered_paths': filtered_paths,
+            'filter_reasons': filter_reasons,
+            'successful_episodes': 0,
+            'voronoi_failed': False,
+            'no_paths': False
         }
     
-    print(f"    ✓ 路径指标计算完成")
+    # ========== Step 4: 为每条有效轨迹创建独立的 episode ==========
     
-    # ========== Step 4: 规则评估 ==========
-    print("\n[步骤4] 规则评估路径质量...")
+    successful_episodes = 0
+    delta_validation_failed = 0  # 新增：增量验证失败计数
     
-    rule_result = evaluate_paths_with_rules(
-        all_paths, paths_metrics, skeleton, robot_position
-    )
-    
-    print(f"    规则评分: {rule_result['score']:.1f}/10")
-    print(f"    子分数: Ef={rule_result['sub_scores']['efficiency_score']:.1f}, "
-          f"Ex={rule_result['sub_scores']['exploration_score']:.1f}")
-    print(f"    决策: {rule_result['decision'].upper()}")
-    print(f"    原因: {rule_result['explanation']}")
-    
-    if rule_result['decision'] == 'delete':
-        print(f"    ⚠️  规则建议删除此episode")
-        return False, rule_result
-    
-    # ========== Step 5: 生成动作序列 ==========
-    print("\n[步骤5] 生成动作序列...")
-    
-    # 选择第一条路径作为执行路径
-    selected_path_info = all_paths[0]
-    complete_path = selected_path_info['complete_path']
-    
-    actions, action_details = path_to_actions(
-        complete_path,
-        initial_orientation=90.0,
-        turn_angle=30.0,
-        map_resolution=5.0,
-        forward_step_meters=0.25
-    )
-    
-    print(f"    ✓ 动作序列生成完成")
-    print(f"      - 总动作数: {len(actions)}")
-    print(f"      - Forward: {actions.count(1)}, Left: {actions.count(2)}, Right: {actions.count(3)}")
-    
-    # ========== Step 6: 执行动作并收集轨迹数据 ==========
-    print("\n[步骤6] 执行动作序列并收集轨迹数据...")
-    
-    os.makedirs(episode_folder_path, exist_ok=True)
-    
-    try:
-        trajectory_data, success = collect_trajectory_from_actions(
-            env, actions, episode_folder_path
-        )
+    for traj_idx, traj_data in enumerate(valid_trajectories):
+        # 统一命名格式：<场景名>_<episode序号>_<路径序号>
+        episode_folder_name = f"{scene_name}_{base_episode_num}_{traj_data['path_index']}"
         
-        if not success:
-            print(f"    ✗ 轨迹收集失败")
+        episode_folder_path = os.path.join(output_dir, episode_folder_name)
+        
+        
+        # 创建文件夹
+        os.makedirs(episode_folder_path, exist_ok=True)
+        
+        try:
+            # 重置环境并执行动作收集轨迹
+            env.reset()
+            
+            # 执行动作并收集轨迹
+            trajectory_data, success = collect_trajectory_from_actions(
+                env, traj_data['actions'], episode_folder_path
+            )
+            
+            if success:
+                # 验证轨迹增量是否在合理范围内
+                is_valid, validation_reason = validate_trajectory_deltas(
+                    trajectory_data, max_delta=0.25
+                )
+                
+                if is_valid:
+                    successful_episodes += 1
+                else:
+                    # 轨迹验证失败，删除该 episode
+                    delta_validation_failed += 1  # 新增
+                    tqdm.tqdm.write(f"轨迹验证失败 {episode_folder_name}: {validation_reason}")
+                    if os.path.exists(episode_folder_path):
+                        shutil.rmtree(episode_folder_path)
+            else:
+                if os.path.exists(episode_folder_path):
+                    shutil.rmtree(episode_folder_path)
+        
+        except Exception as e:
             if os.path.exists(episode_folder_path):
                 shutil.rmtree(episode_folder_path)
-            return False, rule_result
-        
-        print(f"\n✓ Episode {scene_name}_ep{episode_num} 处理完成！")
-        print(f"  - 轨迹长度: {len(trajectory_data['position'])} 帧")
-        print(f"  - 文件夹: {episode_folder_path}")
-        
-        return True, rule_result
-        
-    except Exception as e:
-        print(f"    ✗ 轨迹收集失败: {e}")
-        import traceback
-        traceback.print_exc()
-        if os.path.exists(episode_folder_path):
-            shutil.rmtree(episode_folder_path)
-        return False, rule_result
-
+    
+    result = {
+        'total_paths': total_paths,
+        'valid_paths': valid_paths,
+        'filtered_paths': filtered_paths,
+        'filter_reasons': filter_reasons,
+        'successful_episodes': successful_episodes,
+        'delta_validation_failed': delta_validation_failed,  # 新增
+        'voronoi_failed': False,
+        'no_paths': False
+    }
+    
+    print(f"\n✓ 观测 {scene_name}_ep{base_episode_num} 处理完成！")
+    print(f"  - 生成路径: {total_paths} 条")
+    print(f"  - 通过规则筛选: {valid_paths} 条")
+    print(f"  - 未通过规则筛选: {filtered_paths} 条")
+    print(f"  - 增量验证失败: {delta_validation_failed} 条")  # 新增
+    print(f"  - 最终保存: {successful_episodes} 个 episodes")  # 修改
+    
+    return result
 
 def main(config_path="benchmark/nav/pointnav/pointnav_hm3d.yaml", 
-         output_dir='data/diffusion_dataset',
+         output_dir='data/my_dataset',
          scene_names=['Adrian', 'Albertville', 'Anaheim'],
          max_episodes_per_scene=20):
     """
-    主函数：生成 NoMaD 训练数据集（go_stanford 格式，规则筛选）
-    只保留通过规则筛选的episode
-    
-    输出格式:
-        output_dir/
-        ├── Adrian_1/
-        │   ├── 0.jpg, 1.jpg, ...
-        │   └── traj_data.pkl
-        └── ...
+    主函数：生成 NoMaD 训练数据集（规则筛选）
     
     统计指标:
-        - 总episode数量
-        - 保留的episode数量
-        - 删除的episode数量（规则拒绝）
-        - 没有生成路径的episode数量
+        (a) 生成的轨迹总数
+        (b) 通过筛选的轨迹数量
+        (c) 未通过筛选的轨迹数量
+        (d) 由于筛选规则中不同规则被过滤的轨迹数量
     """
     import time
+    from collections import defaultdict
     
     print("="*70)
-    print("生成 NoMaD 训练数据集 ( 规则筛选)")
+    print("生成 NoMaD 训练数据集 (规则筛选)")
     print("="*70)
     
     os.makedirs(output_dir, exist_ok=True)
@@ -1133,20 +1248,21 @@ def main(config_path="benchmark/nav/pointnav/pointnav_hm3d.yaml",
     # 计算预估总episode数
     estimated_total = len(scene_names) * max_episodes_per_scene
     
-    print(f"\n配置:")
-    print(f"  目标场景数: {len(scene_names)}")
-    print(f"  每场景最大episodes: {max_episodes_per_scene}")
-    print(f"  预估总episodes: {estimated_total}")
-    print(f"  输出目录: {output_dir}")
-    print(f"  筛选方法: 规则筛选 (阈值 >= 5.5)")
-    print("="*70)
 
-    # 统计变量
-    total_episodes = 0          # 总episode数量
-    kept_episodes = 0           # 保留的episode数量
-    deleted_episodes = 0        # 规则删除的episode数量
-    no_path_episodes = 0        # 没有生成路径的episode数量
+    #统计变量
+    total_paths_generated = 0      # (a) 生成的轨迹总数
+    total_paths_valid = 0          # (b) 通过规则筛选的轨迹数量
+    total_paths_filtered = 0       # (c) 未通过规则筛选的轨迹数量
+    total_delta_failed = 0         # (d) 新增：增量验证失败数量
+    total_successful = 0           # (e) 新增：最终成功保存数量
+    all_filter_reasons = defaultdict(int)
     
+    # 辅助统计
+    total_episodes_processed = 0
+    voronoi_failed_count = 0
+    no_paths_count = 0
+    too_close_to_wall_count = 0
+
     # 创建全局进度条
     global_pbar = tqdm.tqdm(
         total=estimated_total,
@@ -1178,80 +1294,74 @@ def main(config_path="benchmark/nav/pointnav/pointnav_hm3d.yaml",
             )
         except Exception as e:
             tqdm.tqdm.write(f"✗ 加载场景 {scene_name} 失败: {e}")
-            global_pbar.update(max_episodes_per_scene)  # 跳过这个场景的所有episodes
+            global_pbar.update(max_episodes_per_scene)
             continue
         
         scene_total_episodes = len(dataset.episodes)
         episodes_to_process = min(max_episodes_per_scene, scene_total_episodes)
         
+        # 场景统计
+        scene_total_paths = 0
+        scene_valid_paths = 0
+        scene_filtered_paths = 0
+        
         # 创建仿真环境
         try:
             with habitat.Env(config=config, dataset=dataset) as env:
-                scene_kept = 0
-                scene_deleted = 0
-                scene_no_path = 0
-                
                 for ep_idx in range(episodes_to_process):
                     observations = env.reset()
                     episode_num = ep_idx + 1
-                    total_episodes += 1
-                    
-                    traj_folder_name = f"{scene_name}_{episode_num}"
-                    traj_folder_path = os.path.join(output_dir, traj_folder_name)
-                    
-                    # 检查是否已存在
-                    if os.path.exists(traj_folder_path):
-                        required_files = ['traj_data.pkl', '0.jpg']
-                        if all(os.path.exists(os.path.join(traj_folder_path, f)) 
-                               for f in required_files):
-                            kept_episodes += 1
-                            scene_kept += 1
-                            global_pbar.update(1)
-                            continue
-                    
-                    # 获取RGB观测
-                    rgb_obs = observations["rgb"]
+                    total_episodes_processed += 1
                     
                     # 处理 episode
                     try:
-                        success, rule_result = process_single_episode(
-                            observations, traj_folder_path, 
-                            scene_name, episode_num, env, rgb_obs
+                        result = process_single_episode_with_new_rules(
+                            observations, output_dir,
+                            scene_name, episode_num, env, 
+                            min_length_m=1.5,
+                            max_steps=50,   
+                            min_curvature=1.28,
+                            max_curvature=2.5
                         )
                         
-                        if success:
-                            kept_episodes += 1
-                            scene_kept += 1
+                        # 累计统计
+                        if result.get('too_close_to_wall', False):
+                            too_close_to_wall_count += 1
+                        elif result['voronoi_failed']:
+                            voronoi_failed_count += 1
+                        elif result['no_paths']:
+                            no_paths_count += 1
                         else:
-                            if rule_result is None:
-                                # 路径生成失败
-                                no_path_episodes += 1
-                                scene_no_path += 1
-                            else:
-                                # 规则拒绝
-                                deleted_episodes += 1
-                                scene_deleted += 1
+                            # 核心统计
+                            total_paths_generated += result['total_paths']
+                            total_paths_valid += result['valid_paths']
+                            total_paths_filtered += result['filtered_paths']
+                            total_delta_failed += result.get('delta_validation_failed', 0)  # 新增
+                            total_successful += result['successful_episodes']  # 新增
                             
-                            # 删除失败的文件夹
-                            if os.path.exists(traj_folder_path):
-                                shutil.rmtree(traj_folder_path)
-                    
+                            # 场景统计
+                            scene_total_paths += result['total_paths']
+                            scene_valid_paths += result['valid_paths']
+                            scene_filtered_paths += result['filtered_paths']
+                            
+                            # 过滤原因统计
+                            for reason, count in result['filter_reasons'].items():
+                                all_filter_reasons[reason] += count
+
                     except Exception as e:
-                        tqdm.tqdm.write(f"错误 - {traj_folder_name}: {e}")
-                        no_path_episodes += 1
-                        scene_no_path += 1
-                        if os.path.exists(traj_folder_path):
-                            shutil.rmtree(traj_folder_path)
+                        tqdm.tqdm.write(f"错误 - {scene_name}_ep{episode_num}: {e}")
+                        voronoi_failed_count += 1
                     
                     # 更新进度条
                     global_pbar.update(1)
                     global_pbar.set_postfix({
-                        'kept': kept_episodes,
-                        'del': deleted_episodes,
-                        'no_path': no_path_episodes
+                        '生成': total_paths_generated,
+                        '规则通过': total_paths_valid,
+                        '最终保存': total_successful  # 修改
                     })
                 
-                tqdm.tqdm.write(f"\n场景 {scene_name}: kept={scene_kept}, del={scene_deleted}, no_path={scene_no_path}")
+                tqdm.tqdm.write(f"\n场景 {scene_name}: 生成={scene_total_paths}, "
+                              f"通过={scene_valid_paths}, 过滤={scene_filtered_paths}")
                 
         except Exception as e:
             tqdm.tqdm.write(f"✗ 创建环境失败 {scene_name}: {e}")
@@ -1265,53 +1375,70 @@ def main(config_path="benchmark/nav/pointnav/pointnav_hm3d.yaml",
     minutes = int((total_time % 3600) // 60)
     seconds = int(total_time % 60)
     
-    # ========== 最终统计 ==========
+        # ========== 最终统计 ==========
     print("\n" + "="*70)
     print("数据集生成完成!")
     print("="*70)
     
-    print(f"\n【耗时统计】")
-    print(f"  总耗时: {hours}小时 {minutes}分钟 {seconds}秒")
-    if total_episodes > 0:
-        print(f"  平均每episode: {total_time/total_episodes:.2f}秒")
+    # (1) 总时间
+    print(f"\n总时间: {hours}小时 {minutes}分钟 {seconds}秒")
+
+    # (2) 生成的轨迹数量
+    print(f"生成的轨迹数量: {total_paths_generated}")
     
-    print(f"\n【Episode统计】")
-    print(f"  总Episode数量: {total_episodes}")
-    print(f"  ├── 保留的Episode数量: {kept_episodes}")
-    print(f"  ├── 删除的Episode数量（规则拒绝）: {deleted_episodes}")
-    print(f"  └── 无路径的Episode数量: {no_path_episodes}")
+    # (3) 通过规则筛选的轨迹数量
+    print(f"通过规则筛选的轨迹数量: {total_paths_valid}")
     
-    # 验证总数
-    if total_episodes > 0:
-        assert kept_episodes + deleted_episodes + no_path_episodes == total_episodes, \
-            f"统计不一致: {kept_episodes} + {deleted_episodes} + {no_path_episodes} != {total_episodes}"
-        print(f"  [验证] 三者之和 = {kept_episodes + deleted_episodes + no_path_episodes} ✓")
+    # (4) 未通过规则筛选的轨迹数量
+    print(f"未通过规则筛选的轨迹数量: {total_paths_filtered}")
     
-    # 计算保留率
-    if total_episodes > 0:
-        keep_rate = kept_episodes / total_episodes * 100
-        print(f"\n【保留率】")
-        print(f"  保留率: {keep_rate:.1f}% ({kept_episodes}/{total_episodes})")
+    # (5) 新增：增量验证失败数量
+    print(f"增量验证失败数量: {total_delta_failed}")
     
-    print(f"\n【输出信息】")
-    print(f"  输出目录: {output_dir}")
-    print(f"  处理的场景数: {len(scene_names)}")
+    # (6) 新增：最终成功保存数量
+    print(f"最终成功保存数量: {total_successful}")
+    
+    # 分类统计
+    filter_categories = {
+        '小于最小路径长度': 0,
+        '大于最大步数': 0,
+        '小于最小路径比率': 0,
+        '大于最大路径比率': 0,
+        '超出震荡检测': 0,
+        '超出平均动作块长度': 0,
+        '超出原地旋转步数': 0,
+    }
+    
+    for reason, count in all_filter_reasons.items():
+        if "小于最小长度" in reason:
+            filter_categories['小于最小路径长度'] += count
+        elif "超过最大步数" in reason:
+            filter_categories['大于最大步数'] += count
+        elif "小于最小值" in reason:  # 曲率小于最小值
+            filter_categories['小于最小路径比率'] += count
+        elif "超过最大值" in reason:  # 曲率超过最大值
+            filter_categories['大于最大路径比率'] += count
+        elif "震荡率" in reason:
+            filter_categories['超出震荡检测'] += count
+        elif "平均步长" in reason:
+            filter_categories['超出平均动作块长度'] += count
+        elif "连续4次或更多旋转" in reason:
+            filter_categories['超出原地旋转步数'] += count
+    
+    for category, count in filter_categories.items():
+        print(f"  - {category}: {count}")
+    
     print("="*70)
     
     # 保存统计结果到JSON
     stats = {
-        'total_episodes': total_episodes,
-        'kept_episodes': kept_episodes,
-        'deleted_episodes': deleted_episodes,
-        'no_path_episodes': no_path_episodes,
-        'keep_rate': kept_episodes / total_episodes if total_episodes > 0 else 0,
-        'scenes': scene_names,
-        'num_scenes': len(scene_names),
-        'max_episodes_per_scene': max_episodes_per_scene,
-        'filter_method': 'rule-based',
-        'filter_threshold': 5.5,
         'total_time_seconds': total_time,
-        'avg_time_per_episode': total_time / total_episodes if total_episodes > 0 else 0
+        'total_paths_generated': total_paths_generated,
+        'total_paths_valid': total_paths_valid,
+        'total_paths_filtered': total_paths_filtered,
+        'total_delta_failed': total_delta_failed,  # 新增
+        'total_successful': total_successful,       # 新增
+        'filter_categories': filter_categories,
     }
     
     stats_path = os.path.join(output_dir, 'dataset_statistics.json')
@@ -1325,7 +1452,7 @@ if __name__ == "__main__":
     
     # 配置参数
     CONFIG_PATH = "benchmark/nav/pointnav/pointnav_hm3d.yaml"
-    OUTPUT_DIR = "data/diffusion_dataset"
+    OUTPUT_DIR = "data/my_dataset_800_40"
     
     # 自动获取所有场景名称
     content_dir = "data/datasets/pointnav/hm3d/v1/train/content"
@@ -1338,12 +1465,12 @@ if __name__ == "__main__":
         SCENE_NAMES.append(scene_name)
     
     # 排序确保顺序一致
-    SCENE_NAMES = sorted(SCENE_NAMES)
+    SCENE_NAMES = sorted(SCENE_NAMES)#[:50]
     
     print(f"找到 {len(SCENE_NAMES)} 个场景")
     
     # 每个场景最多处理的episodes数
-    MAX_EPISODES_PER_SCENE = 30  # 可以调整
+    MAX_EPISODES_PER_SCENE = 40  # 可以调整
     
     # 运行
     main(

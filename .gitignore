@@ -105,9 +105,6 @@ data
 /docs
 /examples
 habitat-baselines/
-/habitat-lab/abandoned
-/habitat-lab/visualization
-/habitat-lab/visualization_2
 /res
 /scripts
 /test

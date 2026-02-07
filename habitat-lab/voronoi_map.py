@@ -165,9 +165,6 @@ def depth_to_obstacle_map(depth, camera_params, agent_pose, map_params):
     # 转换为厘米（与 voronav_pre 保持一致）
     point_cloud_cm = point_cloud_m * 100.0
     
-    print(f"  点云范围 (cm): X[{point_cloud_cm[:,:,0].min():.1f}, {point_cloud_cm[:,:,0].max():.1f}], "
-          f"Y[{point_cloud_cm[:,:,1].min():.1f}, {point_cloud_cm[:,:,1].max():.1f}], "
-          f"Z[{point_cloud_cm[:,:,2].min():.1f}, {point_cloud_cm[:,:,2].max():.1f}]")
     
     # 修改 depth_to_obstacle_map 函数（第172-195行）
 
@@ -185,17 +182,11 @@ def depth_to_obstacle_map(depth, camera_params, agent_pose, map_params):
     # 所以 Z_ground = Z_camera + 88
     point_cloud_cm[:, :, 2] = point_cloud_cm[:, :, 2] + sensor_height_cm
 
-    print(f"  相对地面 (cm): X[{point_cloud_cm[:,:,0].min():.1f}, {point_cloud_cm[:,:,0].max():.1f}], "
-        f"Y[{point_cloud_cm[:,:,1].min():.1f}, {point_cloud_cm[:,:,1].max():.1f}], "
-        f"Z[{point_cloud_cm[:,:,2].min():.1f}, {point_cloud_cm[:,:,2].max():.1f}]")
     
     # ★关键：调整Z坐标为相对于地面
     # 减去相机高度，使 Z=0 表示地面
     point_cloud_cm[:, :, 2] = point_cloud_cm[:, :, 2] - sensor_height_cm
     
-    print(f"  相对地面 (cm): X[{point_cloud_cm[:,:,0].min():.1f}, {point_cloud_cm[:,:,0].max():.1f}], "
-          f"Y[{point_cloud_cm[:,:,1].min():.1f}, {point_cloud_cm[:,:,1].max():.1f}], "
-          f"Z[{point_cloud_cm[:,:,2].min():.1f}, {point_cloud_cm[:,:,2].max():.1f}]")
     
     # 4. 根据机器人位姿转换（移动到视觉范围中心）
     vision_range = map_params['vision_range']  # 格子数
@@ -203,9 +194,6 @@ def depth_to_obstacle_map(depth, camera_params, agent_pose, map_params):
     shift_loc = [vision_range * resolution / 2, 0, np.pi / 2.0]  # [cm, cm, 弧度]
     point_cloud_centered = transform_pose(point_cloud_cm, shift_loc)
     
-    print(f"  中心坐标 (cm): X[{point_cloud_centered[:,:,0].min():.1f}, {point_cloud_centered[:,:,0].max():.1f}], "
-          f"Y[{point_cloud_centered[:,:,1].min():.1f}, {point_cloud_centered[:,:,1].max():.1f}], "
-          f"Z[{point_cloud_centered[:,:,2].min():.1f}, {point_cloud_centered[:,:,2].max():.1f}]")
     
     # 5. 按高度分层投影
     z_bins = [map_params['z_min'], map_params['z_max']]  # [cm, cm]
@@ -216,10 +204,6 @@ def depth_to_obstacle_map(depth, camera_params, agent_pose, map_params):
         resolution  # cm/格子
     )
     
-    print(f"  体素统计: 总数={voxels.sum()}, 非零格子={np.sum(voxels > 0)}")
-    print(f"  各层统计: 下层(z<{map_params['z_min']})={voxels[:,:,0].sum():.0f}, "
-          f"中层({map_params['z_min']}-{map_params['z_max']})={voxels[:,:,1].sum():.0f}, "
-          f"上层(z>{map_params['z_max']})={voxels[:,:,2].sum():.0f}")
     
     # # 6. 生成障碍物地图和探索地图
     # # 障碍物：agent高度范围内的点（中间层）
@@ -245,7 +229,6 @@ def depth_to_obstacle_map(depth, camera_params, agent_pose, map_params):
     obstacle_map = np.clip(obstacle_layer / map_threshold, 0.0, 1.0).astype(np.float32)
     explored_map = np.clip(explored_layer / exp_threshold, 0.0, 1.0).astype(np.float32)
 
-    print(f"  障碍物像素: {(obstacle_map > 0.5).sum()}, 探索像素: {(explored_map > 0.5).sum()}")
     return obstacle_map, explored_map
 
 
@@ -601,7 +584,6 @@ def extract_voronoi_nodes(skeleton, merge_distance=5):
         
         visited[x_min:x_max, y_min:y_max] = True
     
-    print(f"    识别到 {len(joint_nodes)} 个关节点")
     return joint_nodes
 
 # ============= 5. 构建Voronoi拓扑图 =============
@@ -708,29 +690,25 @@ def depth_to_voronoi(depth, camera_params=None, agent_pose=None, map_params=None
         map_params = {
             'map_size': 240,
             'resolution': 5,  # cm per pixel
-            'vision_range': 100,
+            'vision_range': 60,
             'z_min': 25,#高度区间
             'z_max': 138
         }
     
     # 1. 深度图 → 障碍物地图和探索地图
-    print("步骤1: 深度图 → 2D地图...")
     obstacle_map, explored_map = depth_to_obstacle_map(
         depth, camera_params, agent_pose, map_params
     )
     
     # 2. 生成Voronoi骨架
-    print("步骤2: 生成Voronoi骨架...")
     skeleton, free_space = generate_voronoi_skeleton(
         obstacle_map, explored_map
     )
     
     # 3. 提取关节点
-    print("步骤3: 提取关节点...")
     joint_nodes = extract_voronoi_nodes(skeleton)
     
     # 4. 构建拓扑图
-    print("步骤4: 构建拓扑图...")
     graph, edges = build_voronoi_graph(skeleton, joint_nodes)
     
     results = {
@@ -743,7 +721,6 @@ def depth_to_voronoi(depth, camera_params=None, agent_pose=None, map_params=None
         'edges': edges
     }
     
-    print(f"完成! 找到 {len(joint_nodes)} 个关节点")
     
     return results
 
@@ -818,7 +795,6 @@ def visualize_voronoi(results, save_path=None):
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"可视化结果已保存到: {save_path}")
     
     plt.show()
 
@@ -828,33 +804,24 @@ if __name__ == "__main__":
     # 读取原始深度数据
     depth_path = "habitat-lab/test/Denmark_start_depth_raw_2.npy"
     
-    print(f"读取原始深度数据: {depth_path}")
-    
     # 直接加载numpy数组
     depth_raw = np.load(depth_path)
-    
-    print(f"  原始深度形状: {depth_raw.shape}, 类型: {depth_raw.dtype}")
-    print(f"  原始深度范围: {depth_raw.min():.6f} - {depth_raw.max():.6f}")
     
     # ★关键1：处理形状（如果是3维，取第一个通道）
     if len(depth_raw.shape) == 3:
         depth_raw = depth_raw[:, :, 0]
-        print(f"  压缩后形状: {depth_raw.shape}")
     
     # ★关键2：Habitat的深度是归一化的[0,1]，需要反归一化
     # Gibson数据集的深度范围：min=0.5m, max=5.0m（来自配置）
     min_depth_m = 0.5
-    max_depth_m = 5.0
+    max_depth_m = 3.0
     
     # 检查是否已经归一化
     if depth_raw.max() <= 1.0:
-        print("  检测到归一化深度，进行反归一化...")
         depth_m = min_depth_m + depth_raw * (max_depth_m - min_depth_m)
     else:
-        print("  深度已经是真实值")
         depth_m = depth_raw
     
-    print(f"  反归一化后深度范围: {depth_m.min():.3f}m - {depth_m.max():.3f}m")
     
     # ★关键3：处理异常值（参考voronav_pre的做法）
     # 替换0值
@@ -873,36 +840,21 @@ if __name__ == "__main__":
     mask_zero = depth_m == 0
     depth_m[mask_zero] = max_depth_m  # 设为最大值
     
-    print(f"  处理异常值后: {depth_m.min():.3f}m - {depth_m.max():.3f}m")
     
     # 转换为厘米
     depth_cm = depth_m * 100.0
-    print(f"  转换为厘米: {depth_cm.min():.1f}cm - {depth_cm.max():.1f}cm")
     
     # 调整到标准尺寸
     target_height, target_width = 256, 256
     if depth_cm.shape != (target_height, target_width):
         depth_cm = cv2.resize(depth_cm, (target_width, target_height), 
                               interpolation=cv2.INTER_LINEAR)
-        print(f"  调整大小到: {depth_cm.shape}")
-    
-    print("\n开始Voronoi图生成...")
+
     results = depth_to_voronoi(depth_cm)
-    
-    print(f"\n统计信息:")
-    print(f"  障碍物占比: {np.mean(results['obstacle_map']):.2%}")
-    print(f"  探索区域占比: {np.mean(results['explored_map']):.2%}")
-    print(f"  自由空间占比: {np.mean(results['free_space']):.2%}")
-    print(f"  骨架点数: {np.sum(results['skeleton'])}")
-    print(f"  关节点数: {len(results['joint_nodes'])}")
+
     
     if len(results['graph']) > 0:
         total_edges = sum(len(v) for v in results['graph'].values())
-        print(f"  图的边数: {total_edges}")
         avg_degree = total_edges / len(results['graph']) if len(results['graph']) > 0 else 0
-        print(f"  平均节点度数: {avg_degree:.2f}")
     
-    print("\n生成可视化...")
     visualize_voronoi(results, save_path='habitat-lab/test/voronoi_result_height_test.png')
-    
-    print("\n✓ 完成！")
